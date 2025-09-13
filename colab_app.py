@@ -24,37 +24,59 @@ class HealthcareChatbot:
         
     def load_model(self):
         """Load 4-bit quantized BioMistral model"""
-        model_id = "BioMistral/BioMistral-7B-DARE"
-        
-        print(f"🔄 Loading model on {self.device}...")
-        print(f"📊 GPU: {torch.cuda.get_device_name(0) if self.device == 'cuda' else 'CPU'}")
-        
-        # 4-bit quantization config
-        quantization_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_compute_dtype=torch.float16,
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_quant_type="nf4"
-        )
-        
-        # Load tokenizer
-        self.tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
-        if not self.tokenizer.pad_token:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
-        
-        # Load 4-bit model
-        self.model = AutoModelForCausalLM.from_pretrained(
-            model_id,
-            quantization_config=quantization_config,
-            torch_dtype=torch.float16,
-            device_map="auto",
-            trust_remote_code=True,
-            low_cpu_mem_usage=True
-        )
-        
-        memory_used = torch.cuda.memory_allocated() / 1024**3
-        print(f"✅ Model loaded! Using {memory_used:.1f}GB GPU memory")
-        return f"✅ Model ready on {torch.cuda.get_device_name(0)} ({memory_used:.1f}GB)"
+        try:
+            model_id = "BioMistral/BioMistral-7B"  # Base model without DARE - better for quantization
+            
+            # Check GPU availability
+            if not torch.cuda.is_available():
+                return "❌ No GPU available! Please enable GPU in Runtime > Change runtime type > GPU"
+            
+            gpu_name = torch.cuda.get_device_name(0)
+            print(f"🔄 Starting model load on {gpu_name}...")
+            
+            # Step 1: Load tokenizer
+            print("📝 Step 1/3: Loading tokenizer...")
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                model_id, 
+                trust_remote_code=True,
+                cache_dir="/content/cache"  # Use Colab's content directory
+            )
+            if not self.tokenizer.pad_token:
+                self.tokenizer.pad_token = self.tokenizer.eos_token
+            print("✅ Tokenizer loaded")
+            
+            # Step 2: Configure quantization
+            print("⚙️ Step 2/3: Configuring 4-bit quantization...")
+            quantization_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=torch.float16,
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_quant_type="nf4"
+            )
+            
+            # Step 3: Load model (this is the slow part)
+            print("📦 Step 3/3: Downloading and loading model (3.5GB)...")
+            print("⏳ This may take 2-5 minutes on first run...")
+            
+            self.model = AutoModelForCausalLM.from_pretrained(
+                model_id,
+                quantization_config=quantization_config,
+                torch_dtype=torch.float16,
+                device_map="auto",
+                trust_remote_code=True,
+                low_cpu_mem_usage=True,
+                cache_dir="/content/cache"
+            )
+            
+            memory_used = torch.cuda.memory_allocated() / 1024**3
+            success_msg = f"✅ Model ready on {gpu_name} ({memory_used:.1f}GB VRAM used)"
+            print(success_msg)
+            return success_msg
+            
+        except Exception as e:
+            error_msg = f"❌ Error loading model: {str(e)}"
+            print(error_msg)
+            return error_msg
 
     def generate(self, message, use_rag=True, temperature=0.7, max_tokens=256):
         """Generate response"""
@@ -97,48 +119,12 @@ with gr.Blocks(title="BioMistral Healthcare - Portfolio Project", theme=gr.theme
     - **RAG (Retrieval-Augmented Generation)** with 15,000+ medical documents
     - **Model Quantization** (4-bit and 8-bit) reducing memory from 14GB to 3.5GB
     - **Fine-tuned on Medical Datasets**: MedInstruct-52k, MedQuad, HealthCareMagic-100k
-    - **Base Model**: BioMistral-7B-DARE (Specialized Biomedical LLM)
+    - **Base Model**: BioMistral-7B (Specialized Biomedical LLM - Base version)
     - **Vector Database**: FAISS for semantic search across medical literature
     - **Deployment**: Optimized for GPU inference with BitsAndBytes quantization
     
     ---
     """)
-    
-    with gr.Row():
-        with gr.Column(scale=1):
-            gr.Markdown("""
-            ### 🛠️ Technical Implementation
-            
-            **Model Architecture:**
-            - Base: BioMistral-7B-DARE
-            - Parameters: 7 Billion
-            - Specialized for biomedical text
-            
-            **Quantization Process:**
-            - Original: FP16 (14GB VRAM)
-            - 8-bit: INT8 quantization (7GB)
-            - 4-bit: NF4 quantization (3.5GB)
-            - Used BitsAndBytes library
-            - 75% memory reduction achieved
-            
-            **RAG Pipeline:**
-            - 15,000+ medical Q&A pairs indexed
-            - Sentence-BERT embeddings (all-MiniLM-L6-v2)
-            - FAISS vector similarity search
-            - Top-5 document retrieval
-            - Context-aware response generation
-            
-            **Training Datasets:**
-            - **MedInstruct**: 52k medical instructions
-            - **MedQuad**: Medical Q&A from NIH
-            - **HealthCareMagic**: 100k doctor consultations
-            
-            **Vector Database Setup:**
-            - FAISS IndexFlatL2 for similarity search
-            - 384-dimensional embeddings
-            - Semantic search across medical literature
-            - Sub-second retrieval performance
-            """)
     
     status = gr.Textbox(label="System Status", value="Initializing... Model will auto-load", interactive=False)
     load_btn = gr.Button("Reload Model", variant="primary")
@@ -182,6 +168,38 @@ with gr.Blocks(title="BioMistral Healthcare - Portfolio Project", theme=gr.theme
     
     gr.Markdown("""
     ---
+    ### 🛠️ Technical Implementation
+    
+    **Model Architecture:**
+    - Base: BioMistral-7B-DARE
+    - Parameters: 7 Billion
+    - Specialized for biomedical text
+    
+    **Quantization Process:**
+    - Original: FP16 (14GB VRAM)
+    - 8-bit: INT8 quantization (7GB)
+    - 4-bit: NF4 quantization (3.5GB)
+    - Used BitsAndBytes library
+    - 75% memory reduction achieved
+    
+    **RAG Pipeline:**
+    - 15,000+ medical Q&A pairs indexed
+    - Sentence-BERT embeddings (all-MiniLM-L6-v2)
+    - FAISS vector similarity search
+    - Top-5 document retrieval
+    - Context-aware response generation
+    
+    **Training Datasets:**
+    - **MedInstruct**: 52k medical instructions
+    - **MedQuad**: Medical Q&A from NIH
+    - **HealthCareMagic**: 100k doctor consultations
+    
+    **Vector Database Setup:**
+    - FAISS IndexFlatL2 for similarity search
+    - 384-dimensional embeddings
+    - Semantic search across medical literature
+    - Sub-second retrieval performance
+    
     ### 📊 Implementation Details & Performance
     
     **Quantization Steps:**
